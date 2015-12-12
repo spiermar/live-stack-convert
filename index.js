@@ -2,6 +2,9 @@
 
 var fs = require('fs');
 var program = require('commander');
+var timeline = {};
+var stack;
+var frames;
 
 function Node(name) {
     this.name = name;
@@ -40,16 +43,74 @@ Node.prototype.serialize = function() {
   return res;
 }
 
-function convert(filename, options) {
+function newStack(name, timestamp) {
+  stack = timeline[timestamp];
+  if (!stack) {
+    stack = new Node('root');
+    timeline[timestamp] = stack;
+  }
+  frames = []
+  frames.unshift(name);
+}
+
+function stackEvent(func, mod) {
+  var re = /^\(/g; // Skip process names
+  if (!re.test(func)) {
+    func = func.replace(';', ':') // replace ; with :
+    func = func.replace('<', '') // remove '<'
+    func = func.replace('>', '') // remove '>'
+    func = func.replace('\'', '') // remove '\''
+    func = func.replace('"', '') // remove '"'
+    if(func.indexOf('(') !== -1) {
+      func = func.substring(0, func.indexOf('(')); // delete everything after '('
+    }
+    frames.unshift(func);
+  }
+}
+
+function endStack() {
+  stack.add(frames, 1);
+}
+
+function parse(filename, options) {
   fs.readFile(filename, 'utf8', function (err, data) {
     if (err) throw err;
-    var root = new Node('root');
-    data.split("\n").map(function (val) {
-      var regex = /(.*) (.*)/g;
-      var matches = regex.exec(val);
-      if(matches) root.add(matches[1].split(";"), parseInt(matches[2]));
-    });
-    var json = JSON.stringify(root.serialize(), null, 2);
+    var lines = data.split("\n"),
+        matches,
+        re;
+
+    for (var i = 0; i < lines.length; i++) {
+      re = /^(\S+\s*?\S*?)\s+(\d+)\/(\d+)\s+\[(\d+)\]\s+(\d+).(\d+)/g;
+      matches = re.exec(lines[i]);
+      if (matches) {
+        newStack(matches[1], matches[5]);
+      } else {
+        re = /^\s*(\w+)\s*(.+) \((\S*)\)/g;
+        matches = re.exec(lines[i]);
+        if (matches) {
+          stackEvent(matches[2], matches[3]);
+        } else {
+          re = /^$/g;
+          matches = re.exec(lines[i]);
+          if (matches) {
+            endStack();
+          } else {
+            re = /^#/g;
+            matches = re.exec(lines[i]);
+            if (matches) {
+              // Comment line. Do nothing.
+            } else {
+              console.log("Don't know what to do with this: " + lines[i]);
+            }
+          }
+        }
+      }
+    };
+    var out = {};
+    for (var timestamp in timeline) {
+      out[timestamp] = timeline[timestamp].serialize();
+    }
+    var json = JSON.stringify(out, null, 2);
     if(options.output) {
       fs.writeFile(options.output, json, function(err) {
         if (err) throw err;
@@ -61,10 +122,10 @@ function convert(filename, options) {
 }
 
 program
-  .version('0.2.0')
+  .version('0.0.1')
   .arguments('<filename>')
   .option('-o, --output <filename>', 'Save output to <filename>.')
-  .action(convert);
+  .action(parse);
 
 program.parse(process.argv);
 
